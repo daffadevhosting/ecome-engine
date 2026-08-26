@@ -1,0 +1,33 @@
+name = "cloudflare-store-engine"
+main = "src/ecome.ts"
+compatibility_date = "2024-01-01"
+
+# 1. D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "store-db"
+database_id = "<DATABASE_ID_D1_ANDA>"
+
+# 2. KV Namespace Binding
+[[kv_namespaces]]
+binding = "STORE_KV"
+id = "<KV_NAMESPACE_ID_ANDA>"
+
+# 3. Durable Object Binding
+[durable_objects]
+bindings = [
+  { name = "CART_DO", class_name = "CartSession" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["CartSession"]
+
+# 4. R2 Bucket Binding
+[[r2_buckets]]
+binding = "PRODUCT_BUCKET"
+bucket_name = "store-product-images"
+
+# 5. Environment Variables
+[vars]
+MIDTRANS_IS_PRODUCTION = "false"
