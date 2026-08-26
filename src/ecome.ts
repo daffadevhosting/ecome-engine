@@ -1,28 +1,25 @@
 /**
  * ============================================================================
- * CLOUDFLARE WORKER MULTI-TENANT SAAS ENGINE
+ * CLOUDFLARE WORKER MULTI-TENANT DYNAMIC E-COMMERCE & MIDTRANS ENGINE
  * Fitur:
- * 1. Multi-Tenant Auth (Register, Login, JWT Token via Web Crypto)
- * 2. Sistem Langganan PayPal (Integrasi https://paypal-pay.mvstream.workers.dev)
- * 3. Dynamic Schema Builder per Toko (D1 + KV Cache)
- * 4. Katalog Produk Dinamis & Manajemen Inventaris
- * 5. Midtrans Payment Gateway per Tenant
- * 6. UI Dashboard & Storefront Web App (Bawaan)
+ * 1. Multi-Tenant Auth & Dashboard SPA Terintegrasi
+ * 2. Dinamis Midtrans Gateway (Client Key & Server Key per Tenant/Toko)
+ * 3. Dinamis Webhook Notification URL per Tenant (/api/midtrans-webhook/:storeId)
+ * 4. Dynamic Product Schema Builder (D1 + KV Cache)
+ * 5. Langganan SaaS PayPal (https://paypal-pay.mvstream.workers.dev)
  * ============================================================================
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-// Definisi Environment Bindings Cloudflare
 export interface Env {
   DB: D1Database;
   STORE_KV: KVNamespace;
   JWT_SECRET: string;
-  PAYPAL_WORKER_URL?: string; // default: https://paypal-pay.mvstream.workers.dev
+  PAYPAL_WORKER_URL?: string;
 }
 
-// Payload JWT User
 interface JwtPayload {
   userId: string;
   email: string;
@@ -32,6 +29,7 @@ interface JwtPayload {
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Middleware CORS
 app.use('*', cors({
   origin: '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -40,11 +38,10 @@ app.use('*', cors({
 
 /**
  * ============================================================================
- * HELPER KEAMANAN & KRIPTOGRAFI (WEB CRYPTO API)
+ * HELPER KEAMANAN & KRIPTOGRAFI (PBKDF2 & JWT NATIVE CLOUDFLARE)
  * ============================================================================
  */
 
-// Hash Password dengan PBKDF2 (Native Cloudflare Worker)
 async function hashPassword(password: string, saltHex?: string): Promise<{ hashHex: string; saltHex: string }> {
   const enc = new TextEncoder();
   const salt = saltHex 
@@ -60,12 +57,7 @@ async function hashPassword(password: string, saltHex?: string): Promise<{ hashH
   );
 
   const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      salt: salt,
-      iterations: 100000,
-      hash: 'SHA-256',
-    },
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
     keyMaterial,
     256
   );
@@ -77,10 +69,9 @@ async function hashPassword(password: string, saltHex?: string): Promise<{ hashH
   return { hashHex, saltHex: newSaltHex };
 }
 
-// Generate JWT Token
 async function createJWT(payload: Omit<JwtPayload, 'exp'>, secret: string): Promise<string> {
   const header = { alg: 'HS256', typ: 'JWT' };
-  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 7 Hari masa berlaku
+  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
   const fullPayload: JwtPayload = { ...payload, exp };
 
   const encodeBase64Url = (obj: any) =>
@@ -91,7 +82,7 @@ async function createJWT(payload: Omit<JwtPayload, 'exp'>, secret: string): Prom
 
   const key = await crypto.subtle.importKey(
     'raw',
-    enc.encode(secret || 'default-super-secret-key-32chars!!'),
+    enc.encode(secret || 'default-jwt-secret-key-32chars-min!'),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
@@ -104,7 +95,6 @@ async function createJWT(payload: Omit<JwtPayload, 'exp'>, secret: string): Prom
   return `${unsignedToken}.${signatureBase64Url}`;
 }
 
-// Verifikasi JWT Middleware
 async function authMiddleware(c: any, next: any) {
   const authHeader = c.req.header('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -114,11 +104,11 @@ async function authMiddleware(c: any, next: any) {
   const token = authHeader.split(' ')[1];
   const parts = token.split('.');
   if (parts.length !== 3) {
-    return c.json({ success: false, error: 'Format token tidak valid' }, 401);
+    return c.json({ success: false, error: 'Format token salah' }, 401);
   }
 
   try {
-    const secret = c.env.JWT_SECRET || 'default-super-secret-key-32chars!!';
+    const secret = c.env.JWT_SECRET || 'default-jwt-secret-key-32chars-min!';
     const enc = new TextEncoder();
     const unsignedToken = `${parts[0]}.${parts[1]}`;
 
@@ -152,22 +142,20 @@ async function authMiddleware(c: any, next: any) {
 
 /**
  * ============================================================================
- * 1. AUTHENTICATION (REGISTER, LOGIN, PROFILE)
+ * 1. AUTHENTICATION & MULTI-TENANT ONBOARDING
  * ============================================================================
  */
 
-// POST: Registrasi Pemilik Toko Baru
 app.post('/api/auth/register', async (c) => {
   try {
     const { name, email, password, storeName } = await c.req.json();
     if (!name || !email || !password || !storeName) {
-      return c.json({ success: false, error: 'Semua kolom pendaftaran wajib diisi' }, 400);
+      return c.json({ success: false, error: 'Lengkapi semua kolom formulir' }, 400);
     }
 
-    // Cek apakah email sudah terdaftar
     const existingUser = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
     if (existingUser) {
-      return c.json({ success: false, error: 'Email sudah terdaftar. Silakan login.' }, 400);
+      return c.json({ success: false, error: 'Email sudah terdaftar' }, 400);
     }
 
     const { hashHex, saltHex } = await hashPassword(password);
@@ -175,22 +163,20 @@ app.post('/api/auth/register', async (c) => {
     const storeId = 'STORE-' + crypto.randomUUID().slice(0, 8);
     const storeSlug = storeName.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
-    // Buat User & Toko Awal dalam 1 Batch D1
     await c.env.DB.batch([
       c.env.DB.prepare(
         'INSERT INTO users (id, name, email, password_hash, salt) VALUES (?, ?, ?, ?, ?)'
       ).bind(userId, name, email, hashHex, saltHex),
       c.env.DB.prepare(
-        'INSERT INTO stores (id, user_id, name, slug, plan, status) VALUES (?, ?, ?, ?, "FREE", "ACTIVE")'
+        'INSERT INTO stores (id, user_id, name, slug, plan, midtrans_is_prod) VALUES (?, ?, ?, ?, "FREE", 0)'
       ).bind(storeId, userId, storeName, storeSlug),
-      // Inisialisasi default dynamic schema untuk toko baru
       c.env.DB.prepare(
         'INSERT INTO store_schemas (store_id, schema_json, is_active) VALUES (?, ?, 1)'
       ).bind(
         storeId,
         JSON.stringify([
           { id: 'ukuran', label: 'Ukuran Produk', type: 'select', options: ['S', 'M', 'L', 'XL'], filterable: true, required: true },
-          { id: 'warna', label: 'Warna', type: 'color', filterable: true, required: false }
+          { id: 'warna', label: 'Warna Pilihan', type: 'color', filterable: true, required: false }
         ])
       )
     ]);
@@ -199,7 +185,7 @@ app.post('/api/auth/register', async (c) => {
 
     return c.json({
       success: true,
-      message: 'Registrasi berhasil! Toko Anda siap digunakan.',
+      message: 'Toko berhasil dibuat!',
       token,
       store: { id: storeId, name: storeName, slug: storeSlug, plan: 'FREE' }
     });
@@ -208,22 +194,16 @@ app.post('/api/auth/register', async (c) => {
   }
 });
 
-// POST: Login Pemilik Toko
 app.post('/api/auth/login', async (c) => {
   try {
     const { email, password } = await c.req.json();
     const user = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first<any>();
 
-    if (!user) {
-      return c.json({ success: false, error: 'Email atau password salah' }, 401);
-    }
+    if (!user) return c.json({ success: false, error: 'Email atau password salah' }, 401);
 
     const { hashHex } = await hashPassword(password, user.salt);
-    if (hashHex !== user.password_hash) {
-      return c.json({ success: false, error: 'Email atau password salah' }, 401);
-    }
+    if (hashHex !== user.password_hash) return c.json({ success: false, error: 'Email atau password salah' }, 401);
 
-    // Ambil data toko milik user
     const store = await c.env.DB.prepare('SELECT * FROM stores WHERE user_id = ? LIMIT 1').bind(user.id).first<any>();
     const token = await createJWT({ userId: user.id, email: user.email, role: 'merchant' }, c.env.JWT_SECRET);
 
@@ -236,7 +216,8 @@ app.post('/api/auth/login', async (c) => {
         name: store.name,
         slug: store.slug,
         plan: store.plan,
-        midtransClientKey: store.midtrans_client_key
+        midtransClientKey: store.midtrans_client_key || '',
+        midtransIsProd: Boolean(store.midtrans_is_prod)
       } : null
     });
   } catch (err: any) {
@@ -246,91 +227,40 @@ app.post('/api/auth/login', async (c) => {
 
 /**
  * ============================================================================
- * 2. SUBSCRIPTION SYSTEM (INTEGRASI PAYPAL WORKER)
- * Endpoint Target: https://paypal-pay.mvstream.workers.dev
+ * 2. TENANT MIDTRANS CONFIGURATION & SETTINGS
  * ============================================================================
  */
 
-// POST: Buat Invoice / Order Langganan PayPal
-app.post('/api/subscription/create-paypal-order', authMiddleware, async (c) => {
+// POST: Simpan Kredensial Midtrans Toko Mandiri (Server Key & Client Key)
+app.post('/api/store/:storeId/settings/midtrans', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
-    const { plan, durationMonths } = await c.req.json(); // plan: 'PRO' | 'ENTERPRISE'
-    const paypalWorkerUrl = c.env.PAYPAL_WORKER_URL || 'https://paypal-pay.mvstream.workers.dev';
+    const storeId = c.req.param('storeId');
+    const { serverKey, clientKey, isProduction } = await c.req.json();
 
-    // Penentuan Harga Langganan
-    const priceMap: Record<string, number> = {
-      'PRO': 15.00,        // $15 / Bulan
-      'ENTERPRISE': 49.00  // $49 / Bulan
-    };
+    if (!serverKey || !clientKey) {
+      return c.json({ success: false, error: 'Server Key dan Client Key Midtrans wajib diisi' }, 400);
+    }
 
-    const amount = (priceMap[plan] || 15.00) * (durationMonths || 1);
-    const store = await c.env.DB.prepare('SELECT id, name FROM stores WHERE user_id = ?').bind(user.userId).first<any>();
+    // Validasi Kepemilikan Toko
+    const store = await c.env.DB.prepare('SELECT id FROM stores WHERE id = ? AND user_id = ?')
+      .bind(storeId, user.userId)
+      .first();
 
-    // Panggil Service Worker PayPal
-    const paypalResponse = await fetch(`${paypalWorkerUrl}/api/create-order`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: amount.toFixed(2),
-        currency: 'USD',
-        description: `Langganan Paket ${plan} Toko ${store?.name || 'SaaS'} (${durationMonths || 1} Bulan)`,
-        customId: JSON.stringify({ userId: user.userId, storeId: store?.id, plan, durationMonths })
-      })
-    });
+    if (!store) return c.json({ success: false, error: 'Akses ditolak' }, 403);
 
-    const paypalData = await paypalResponse.json<any>();
+    // Update data di D1
+    await c.env.DB.prepare(
+      'UPDATE stores SET midtrans_server_key = ?, midtrans_client_key = ?, midtrans_is_prod = ? WHERE id = ?'
+    ).bind(serverKey, clientKey, isProduction ? 1 : 0, storeId).run();
+
+    // Invalidate KV Cache toko jika ada
+    await c.env.STORE_KV.delete(`store_meta:${storeId}`);
 
     return c.json({
       success: true,
-      message: 'Order PayPal berhasil dibuat',
-      orderId: paypalData.orderId || paypalData.id,
-      approvalUrl: paypalData.approvalUrl || paypalData.links?.find((l: any) => l.rel === 'approve')?.href,
-      plan,
-      amount
-    });
-  } catch (err: any) {
-    return c.json({ success: false, error: 'Gagal menghubungkan ke PayPal Worker: ' + err.message }, 500);
-  }
-});
-
-// POST: Konfirmasi / Webhook Sukses Pembayaran PayPal
-app.post('/api/subscription/capture-paypal', authMiddleware, async (c) => {
-  try {
-    const user = c.get('user');
-    const { paypalOrderId, plan } = await c.req.json();
-    const paypalWorkerUrl = c.env.PAYPAL_WORKER_URL || 'https://paypal-pay.mvstream.workers.dev';
-
-    // Verifikasi Capture dengan PayPal Worker
-    const captureRes = await fetch(`${paypalWorkerUrl}/api/capture-order`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId: paypalOrderId })
-    });
-
-    const captureData = await captureRes.json<any>();
-
-    // Update status paket toko menjadi PRO / ENTERPRISE di Cloudflare D1
-    await c.env.DB.prepare(
-      'UPDATE stores SET plan = ?, status = "ACTIVE" WHERE user_id = ?'
-    ).bind(plan || 'PRO', user.userId).run();
-
-    // Catat riwayat subscription
-    await c.env.DB.prepare(
-      `INSERT INTO subscriptions (id, user_id, plan, amount, paypal_order_id, status)
-       VALUES (?, ?, ?, ?, ?, "PAID")`
-    ).bind(
-      'SUB-' + crypto.randomUUID().slice(0, 8),
-      user.userId,
-      plan || 'PRO',
-      captureData.amount || 15.00,
-      paypalOrderId
-    ).run();
-
-    return c.json({
-      success: true,
-      message: `Selamat! Toko Anda kini telah aktif pada paket ${plan || 'PRO'}.`,
-      plan: plan || 'PRO'
+      message: 'Kredensial Midtrans toko berhasil disimpan dan aktif!',
+      webhookUrl: `/api/midtrans-webhook/${storeId}`
     });
   } catch (err: any) {
     return c.json({ success: false, error: err.message }, 500);
@@ -339,16 +269,15 @@ app.post('/api/subscription/capture-paypal', authMiddleware, async (c) => {
 
 /**
  * ============================================================================
- * 3. MULTI-TENANT DYNAMIC SCHEMA BUILDER (ISOLASI PER TOKO)
+ * 3. DYNAMIC SCHEMA MANAGEMENT PER TENANT
  * ============================================================================
  */
 
-// GET: Ambil Dynamic Schema Toko
+// GET: Schema Atribut Toko
 app.get('/api/store/:storeId/schema', async (c) => {
   const storeId = c.req.param('storeId');
   const cacheKey = `schema:${storeId}`;
 
-  // Cek KV Cache Toko
   const cached = await c.env.STORE_KV.get(cacheKey);
   if (cached) return c.json({ success: true, source: 'kv', data: JSON.parse(cached) });
 
@@ -362,23 +291,23 @@ app.get('/api/store/:storeId/schema', async (c) => {
   return c.json({ success: true, source: 'd1', data: schema });
 });
 
-// POST: Update Dynamic Schema Toko (Wajib Login & Pemilik Toko)
+// POST: Update Schema Atribut Toko
 app.post('/api/store/:storeId/schema', authMiddleware, async (c) => {
   const user = c.get('user');
   const storeId = c.req.param('storeId');
   const newSchema = await c.req.json();
 
-  // Validasi Kepemilikan Toko & Kuota Fitur berdasarkan Paket
-  const store = await c.env.DB.prepare('SELECT * FROM stores WHERE id = ? AND user_id = ?').bind(storeId, user.userId).first<any>();
-  if (!store) {
-    return c.json({ success: false, error: 'Akses ditolak: Toko tidak ditemukan' }, 403);
-  }
+  const store = await c.env.DB.prepare('SELECT plan FROM stores WHERE id = ? AND user_id = ?')
+    .bind(storeId, user.userId)
+    .first<any>();
 
-  // Cek Batasan Paket FREE
+  if (!store) return c.json({ success: false, error: 'Toko tidak ditemukan' }, 403);
+
+  // Pembatasan Paket FREE
   if (store.plan === 'FREE' && Array.isArray(newSchema) && newSchema.length > 3) {
     return c.json({
       success: false,
-      error: 'Paket FREE dibatasi maksimal 3 atribut dinamis. Upgrade ke PRO via PayPal untuk atribut tanpa batas!'
+      error: 'Paket FREE dibatasi 3 atribut dinamis. Upgrade ke PRO via PayPal untuk kuota tanpa batas!'
     }, 403);
   }
 
@@ -387,28 +316,14 @@ app.post('/api/store/:storeId/schema', authMiddleware, async (c) => {
     c.env.DB.prepare('INSERT INTO store_schemas (store_id, schema_json, is_active) VALUES (?, ?, 1)').bind(storeId, JSON.stringify(newSchema))
   ]);
 
-  // Update Cache KV
   await c.env.STORE_KV.put(`schema:${storeId}`, JSON.stringify(newSchema));
 
-  return c.json({ success: true, message: 'Skema toko berhasil diperbarui!' });
-});
-
-// POST: Konfigurasi Kunci Midtrans Toko
-app.post('/api/store/:storeId/settings/midtrans', authMiddleware, async (c) => {
-  const user = c.get('user');
-  const storeId = c.req.param('storeId');
-  const { serverKey, clientKey } = await c.req.json();
-
-  await c.env.DB.prepare(
-    'UPDATE stores SET midtrans_server_key = ?, midtrans_client_key = ? WHERE id = ? AND user_id = ?'
-  ).bind(serverKey, clientKey, storeId, user.userId).run();
-
-  return c.json({ success: true, message: 'Kredensial Midtrans toko berhasil disimpan!' });
+  return c.json({ success: true, message: 'Skema dinamis toko berhasil diperbarui!' });
 });
 
 /**
  * ============================================================================
- * 4. PRODUK & MIDTRANS CHECKOUT PER TENANT
+ * 4. PRODUK & TRANSAKSI MIDTRANS DINAMIS PER TENANT
  * ============================================================================
  */
 
@@ -431,14 +346,17 @@ app.get('/api/store/:storeId/products', async (c) => {
   return c.json({ success: true, data: products });
 });
 
-// POST: Tambah Produk Baru ke Toko
+// POST: Tambah Produk Baru
 app.post('/api/store/:storeId/products', authMiddleware, async (c) => {
   const user = c.get('user');
   const storeId = c.req.param('storeId');
   const { name, price, stock, imageUrl, attributes } = await c.req.json();
 
-  const store = await c.env.DB.prepare('SELECT plan FROM stores WHERE id = ? AND user_id = ?').bind(storeId, user.userId).first<any>();
-  if (!store) return c.json({ success: false, error: 'Toko tidak sah' }, 403);
+  const store = await c.env.DB.prepare('SELECT id FROM stores WHERE id = ? AND user_id = ?')
+    .bind(storeId, user.userId)
+    .first();
+
+  if (!store) return c.json({ success: false, error: 'Akses ditolak' }, 403);
 
   const prodId = 'PROD-' + crypto.randomUUID().slice(0, 8);
   await c.env.DB.prepare(
@@ -448,225 +366,390 @@ app.post('/api/store/:storeId/products', authMiddleware, async (c) => {
   return c.json({ success: true, message: 'Produk berhasil ditambahkan', productId: prodId });
 });
 
-// POST: Checkout Midtrans Snap Khusus Toko
+// POST: Checkout Midtrans Menggunakan Kredensial Toko Terkait
 app.post('/api/store/:storeId/checkout', async (c) => {
-  const storeId = c.req.param('storeId');
-  const { customer, items, totalAmount } = await c.req.json();
+  try {
+    const storeId = c.req.param('storeId');
+    const { customer, items, totalAmount } = await c.req.json();
 
-  const store = await c.env.DB.prepare('SELECT * FROM stores WHERE id = ?').bind(storeId).first<any>();
-  if (!store || !store.midtrans_server_key) {
-    return c.json({ success: false, error: 'Toko belum mengatur Server Key Midtrans' }, 400);
+    // 1. Ambil Kunci Midtrans Toko dari Database D1
+    const store = await c.env.DB.prepare(
+      'SELECT id, name, midtrans_server_key, midtrans_is_prod FROM stores WHERE id = ?'
+    ).bind(storeId).first<any>();
+
+    if (!store || !store.midtrans_server_key) {
+      return c.json({
+        success: false,
+        error: 'Toko ini belum menyelesaikan konfigurasi Server Key Midtrans di dashboard merchant'
+      }, 400);
+    }
+
+    const orderId = `ORD-${store.id.slice(-4)}-${Date.now()}`;
+    const baseUrl = store.midtrans_is_prod 
+      ? 'https://app.midtrans.com/snap/v1' 
+      : 'https://app.sandbox.midtrans.com/snap/v1';
+
+    // 2. Request Snap Token ke Akun Midtrans Toko Terkait
+    const authHeader = 'Basic ' + btoa(store.midtrans_server_key + ':');
+    const midtransRes = await fetch(`${baseUrl}/transactions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader
+      },
+      body: JSON.stringify({
+        transaction_details: { order_id: orderId, gross_amount: totalAmount },
+        customer_details: customer,
+        item_details: items
+      })
+    });
+
+    const snapData = await midtransRes.json<any>();
+
+    if (!midtransRes.ok) {
+      return c.json({ success: false, error: 'Gagal membuat transaksi Midtrans', details: snapData }, 502);
+    }
+
+    // 3. Simpan Pesanan ke D1
+    await c.env.DB.prepare(
+      'INSERT INTO orders (id, store_id, customer_name, customer_email, total_amount, status, snap_token, items_json) VALUES (?, ?, ?, ?, ?, "pending", ?, ?)'
+    ).bind(orderId, storeId, customer.name, customer.email, totalAmount, snapData.token, JSON.stringify(items)).run();
+
+    return c.json({
+      success: true,
+      orderId,
+      snapToken: snapData.token,
+      redirectUrl: snapData.redirect_url
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
+});
 
-  const orderId = `ORD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
-  const authHeader = 'Basic ' + btoa(store.midtrans_server_key + ':');
+// POST: Midtrans Webhook Callback Dinamis per Toko (/api/midtrans-webhook/:storeId)
+app.post('/api/midtrans-webhook/:storeId', async (c) => {
+  try {
+    const storeId = c.req.param('storeId');
+    const payload = await c.req.json();
+    const { order_id, status_code, gross_amount, signature_key, transaction_status, fraud_status } = payload;
 
-  const midtransRes = await fetch('https://app.sandbox.midtrans.com/snap/v1/transactions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': authHeader
-    },
-    body: JSON.stringify({
-      transaction_details: { order_id: orderId, gross_amount: totalAmount },
-      customer_details: customer,
-      item_details: items
-    })
-  });
+    // Ambil Server Key Toko Terkait
+    const store = await c.env.DB.prepare('SELECT midtrans_server_key FROM stores WHERE id = ?')
+      .bind(storeId)
+      .first<any>();
 
-  const snapData = await midtransRes.json<any>();
+    if (!store || !store.midtrans_server_key) {
+      return c.json({ error: 'Toko tidak ditemukan' }, 404);
+    }
 
-  await c.env.DB.prepare(
-    'INSERT INTO orders (id, store_id, customer_name, customer_email, total_amount, status, snap_token, items_json) VALUES (?, ?, ?, ?, ?, "pending", ?, ?)'
-  ).bind(orderId, storeId, customer.name, customer.email, totalAmount, snapData.token, JSON.stringify(items)).run();
+    // Verifikasi Signature SHA-512 dengan Server Key Toko
+    const rawString = `${order_id}${status_code}${gross_amount}${store.midtrans_server_key}`;
+    const encoder = new TextEncoder();
+    const data = encoder.encode(rawString);
+    const hashBuffer = await crypto.subtle.digest('SHA-512', data);
+    const computedSignature = Array.from(new Uint8Array(hashBuffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
 
-  return c.json({ success: true, orderId, snapToken: snapData.token, redirectUrl: snapData.redirect_url });
+    if (computedSignature !== signature_key) {
+      return c.json({ error: 'Invalid Signature' }, 403);
+    }
+
+    // Tentukan status pembayaran
+    let orderStatus = 'pending';
+    if (transaction_status === 'capture') {
+      orderStatus = fraud_status === 'accept' ? 'paid' : 'challenge';
+    } else if (transaction_status === 'settlement') {
+      orderStatus = 'paid';
+    } else if (['cancel', 'deny', 'expire'].includes(transaction_status)) {
+      orderStatus = 'failed';
+    }
+
+    // Update status di D1 & kurangi stok jika status 'paid'
+    if (orderStatus === 'paid') {
+      const order = await c.env.DB.prepare('SELECT items_json, status FROM orders WHERE id = ? AND store_id = ?')
+        .bind(order_id, storeId)
+        .first<{ items_json: string; status: string }>();
+
+      if (order && order.status !== 'paid') {
+        const items = JSON.parse(order.items_json);
+        const batchOps = [
+          c.env.DB.prepare("UPDATE orders SET status = 'paid' WHERE id = ?").bind(order_id)
+        ];
+
+        for (const item of items) {
+          if (item.productId) {
+            batchOps.push(
+              c.env.DB.prepare('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?').bind(item.quantity || 1, item.productId)
+            );
+          }
+        }
+        await c.env.DB.batch(batchOps);
+      }
+    } else {
+      await c.env.DB.prepare('UPDATE orders SET status = ? WHERE id = ?').bind(orderStatus, order_id).run();
+    }
+
+    return c.json({ status: 'ok', message: `Pesanan ${order_id} diperbarui menjadi ${orderStatus}` });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 });
 
 /**
  * ============================================================================
- * 5. FRONTEND SAAS LANDING & DASHBOARD SPA (DIRECTLY HOSTED BY WORKER)
+ * 5. SAAS SUBSCRIPTION (INTEGRASI PAYPAL WORKER)
  * ============================================================================
  */
-app.get('/', (c) => {
+
+app.post('/api/subscription/create-paypal-order', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const { plan } = await c.req.json();
+    const paypalWorkerUrl = c.env.PAYPAL_WORKER_URL || 'https://paypal-pay.mvstream.workers.dev';
+
+    const priceMap: Record<string, number> = { 'PRO': 15.00, 'ENTERPRISE': 49.00 };
+    const amount = priceMap[plan] || 15.00;
+
+    const paypalResponse = await fetch(`${paypalWorkerUrl}/api/create-order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: amount.toFixed(2),
+        currency: 'USD',
+        description: `Langganan SaaS Paket ${plan}`,
+        customId: JSON.stringify({ userId: user.userId, plan })
+      })
+    });
+
+    const paypalData = await paypalResponse.json<any>();
+    return c.json({
+      success: true,
+      approvalUrl: paypalData.approvalUrl || paypalData.links?.find((l: any) => l.rel === 'approve')?.href,
+      plan,
+      amount
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+/**
+ * ============================================================================
+ * 6. DASHBOARD & STOREFRONT SPA (DIHOSTING LANGSUNG OLEH WORKER)
+ * ============================================================================
+ */
+app.get('*', (c) => {
   return c.html(`
 <!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cloudflare Multi-Tenant E-Commerce & Subscription Engine</title>
+  <title>Cloudflare Store Engine - SaaS Multi-Tenant</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     body { font-family: 'Plus Jakarta Sans', sans-serif; }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen">
-  <!-- Navigasi Utama -->
-  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-50">
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+
+  <!-- Header Global -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
     <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl bg-orange-500 flex items-center justify-center font-bold text-white shadow-lg shadow-orange-500/20">⚡</div>
-        <span class="font-bold text-lg text-white">StoreEngine <span class="text-xs bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded border border-orange-500/30">SaaS Multi-Tenant</span></span>
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-orange-500 to-amber-500 flex items-center justify-center font-bold text-white shadow-lg shadow-orange-500/20">⚡</div>
+        <div>
+          <span class="font-bold text-white leading-tight block">StoreEngine SaaS</span>
+          <span class="text-[10px] text-orange-400 font-mono">Dinamis Midtrans per Toko</span>
+        </div>
       </div>
-      <div id="auth-nav" class="flex items-center gap-3">
-        <!-- Status auth dynamically injected -->
-      </div>
+      <div id="nav-actions" class="flex items-center gap-3"></div>
     </div>
   </header>
 
-  <!-- Main View Container -->
-  <main class="max-w-7xl mx-auto px-4 py-8">
-    <div id="app-view"></div>
-  </main>
+  <!-- Container Konten Utama -->
+  <main class="flex-grow max-w-7xl w-full mx-auto px-4 py-8" id="app-root"></main>
 
   <script>
-    let currentUser = null;
-    let currentStore = null;
-    let authToken = localStorage.getItem('token');
+    let token = localStorage.getItem('token');
+    let userStore = JSON.parse(localStorage.getItem('store') || 'null');
 
     document.addEventListener('DOMContentLoaded', () => {
-      initApp();
+      renderApp();
     });
 
-    function initApp() {
-      if (authToken) {
-        renderDashboard();
+    function renderApp() {
+      const nav = document.getElementById('nav-actions');
+      const root = document.getElementById('app-root');
+
+      if (!token) {
+        // Tampilan Landing Page & Login
+        nav.innerHTML = \`
+          <button onclick="promptLogin()" class="px-4 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white rounded-xl">Masuk Merchant</button>
+          <button onclick="promptRegister()" class="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white rounded-xl shadow-lg shadow-orange-500/20">Buka Toko Baru</button>
+        \`;
+
+        root.innerHTML = \`
+          <div class="text-center max-w-3xl mx-auto py-12 space-y-6">
+            <span class="px-3 py-1 rounded-full text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30">Dukungan Multi-Tenant Midtrans + Skema Dinamis</span>
+            <h1 class="text-4xl sm:text-5xl font-extrabold text-white tracking-tight">Platform E-Commerce Modern dengan <span class="text-orange-400">Midtrans Mandiri</span></h1>
+            <p class="text-slate-400 text-sm leading-relaxed">Setiap pemilik toko dapat memasukkan Server Key & Client Key Midtrans milik masing-masing. Dana penjualan langsung masuk ke rekening toko Anda tanpa potongan platform.</p>
+            <div class="flex justify-center gap-4 pt-4">
+              <button onclick="promptRegister()" class="px-6 py-3 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl text-sm shadow-xl shadow-orange-500/25">Mulai Buka Toko Sekarang &rarr;</button>
+            </div>
+          </div>
+        \`;
       } else {
-        renderLandingAndAuth();
+        // Tampilan Dashboard Toko Tenant
+        nav.innerHTML = \`
+          <span class="text-xs text-slate-400">Toko: <strong class="text-white">\${userStore?.name || 'Toko Saya'}</strong> (\${userStore?.plan || 'FREE'})</span>
+          <button onclick="logout()" class="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl hover:bg-red-500/30">Keluar</button>
+        \`;
+
+        root.innerHTML = \`
+          <div class="space-y-6">
+            <!-- Kartu Konfigurasi Midtrans Tenant -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div>
+                  <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i data-lucide="credit-card" class="w-5 h-5 text-orange-400"></i> Pengaturan Kredensial Midtrans Toko Anda
+                  </h2>
+                  <p class="text-xs text-slate-400">Masukkan API Key Midtrans Anda sendiri. Pembayaran pelanggan akan langsung masuk ke akun Midtrans toko Anda.</p>
+                </div>
+                <span class="text-xs px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">Terkoneksi</span>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div>
+                  <label class="block text-slate-400 mb-1">Midtrans Client Key (Frontend)</label>
+                  <input type="text" id="store-midtrans-client" placeholder="SB-Mid-client-xxxxxxxx" value="\${userStore?.midtransClientKey || ''}" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200">
+                </div>
+                <div>
+                  <label class="block text-slate-400 mb-1">Midtrans Server Key (Secret Worker)</label>
+                  <input type="password" id="store-midtrans-server" placeholder="SB-Mid-server-xxxxxxxx" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200">
+                </div>
+              </div>
+
+              <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
+                <div>
+                  <span class="text-slate-400 block font-mono text-[11px]">URL Webhook Notification untuk Dashboard Midtrans Anda:</span>
+                  <span class="text-orange-400 font-mono font-bold">\${window.location.origin}/api/midtrans-webhook/\${userStore?.id}</span>
+                </div>
+                <button onclick="saveMidtransSettings()" class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-lg shadow">Simpan Kunci</button>
+              </div>
+            </div>
+
+            <!-- Bagian Upgrade Langganan SaaS PayPal -->
+            <div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div>
+                <span class="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20">SaaS Plan: \${userStore?.plan || 'FREE'}</span>
+                <h3 class="text-base font-bold text-white mt-1">Upgrade ke Pro Merchant untuk Fitur Tanpa Batas</h3>
+                <p class="text-xs text-slate-400">Dapatkan skema dinamis tak terbatas dan prioritas edge caching dengan pembayaran PayPal.</p>
+              </div>
+              <button onclick="subscribePayPal('PRO')" class="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-slate-950 font-bold text-xs rounded-xl shadow-lg">Langganan Pro ($15/bln)</button>
+            </div>
+          </div>
+        \`;
       }
+      lucide.createIcons();
     }
 
-    function renderLandingAndAuth() {
-      const nav = document.getElementById('auth-nav');
-      nav.innerHTML = '<button onclick="showAuthModal(\\'login\\')" class="px-4 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white rounded-xl">Masuk</button><button onclick="showAuthModal(\\'register\\')" class="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white rounded-xl shadow-lg shadow-orange-500/20">Daftar Toko</button>';
+    function promptRegister() {
+      const name = prompt("Nama Lengkap Anda:");
+      const email = prompt("Email:");
+      const password = prompt("Password:");
+      const storeName = prompt("Nama Toko Anda:");
+      if (!email || !password || !storeName) return;
 
-      document.getElementById('app-view').innerHTML = \`
-        <div class="text-center max-w-3xl mx-auto py-12 space-y-6">
-          <span class="px-3 py-1 rounded-full text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30">Cloudflare Edge + D1 + Midtrans + PayPal</span>
-          <h1 class="text-4xl sm:text-5xl font-extrabold text-white tracking-tight">Platform Toko E-Commerce dengan <span class="text-orange-400">Skema Atribut Dinamis</span></h1>
-          <p class="text-slate-400 text-sm leading-relaxed">Kelola toko Anda dengan skema produk fleksibel tanpa batas. Dukungan gateway pembayaran Midtrans Snap untuk pelanggan lokal dan sistem langganan PayPal untuk merchant global.</p>
-          <div class="flex justify-center gap-4 pt-4">
-            <button onclick="showAuthModal('register')" class="px-6 py-3 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl text-sm shadow-xl shadow-orange-500/25">Mulai Buka Toko Gratis &rarr;</button>
-          </div>
-        </div>
-
-        <!-- Tabel Paket Langganan PayPal -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto pt-8">
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <h3 class="text-lg font-bold text-white">Starter (Free)</h3>
-            <p class="text-2xl font-black text-white">Rp 0 <span class="text-xs font-normal text-slate-400">/ selamanya</span></p>
-            <ul class="text-xs text-slate-300 space-y-2">
-              <li>✓ Maksimal 3 Field Dinamis</li>
-              <li>✓ 20 Produk Aktif</li>
-              <li>✓ Integrasi Midtrans Snap</li>
-            </ul>
-          </div>
-          <div class="bg-slate-900 border-2 border-orange-500 rounded-2xl p-6 space-y-4 relative shadow-2xl shadow-orange-500/10">
-            <span class="absolute -top-3 right-4 px-2 py-0.5 bg-orange-500 text-[10px] font-bold uppercase rounded text-white">Paling Populer</span>
-            <h3 class="text-lg font-bold text-white">Pro Merchant</h3>
-            <p class="text-2xl font-black text-orange-400">$15 <span class="text-xs font-normal text-slate-400">/ bulan (via PayPal)</span></p>
-            <ul class="text-xs text-slate-300 space-y-2">
-              <li>✓ <strong>Unlimited Dynamic Schema</strong></li>
-              <li>✓ Unlimited Produk & Transaksi</li>
-              <li>✓ Fast Edge KV Caching</li>
-            </ul>
-            <button onclick="subscribePayPal('PRO')" class="w-full py-2 bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs rounded-xl">Langganan via PayPal</button>
-          </div>
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <h3 class="text-lg font-bold text-white">Enterprise</h3>
-            <p class="text-2xl font-black text-white">$49 <span class="text-xs font-normal text-slate-400">/ bulan (via PayPal)</span></p>
-            <ul class="text-xs text-slate-300 space-y-2">
-              <li>✓ Semua Fitur Pro</li>
-              <li>✓ Custom Domain & R2 Bucket Terdedikasi</li>
-              <li>✓ Prioritas SLA 99.99%</li>
-            </ul>
-            <button onclick="subscribePayPal('ENTERPRISE')" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl">Langganan via PayPal</button>
-          </div>
-        </div>
-      \`;
-    }
-
-    function showAuthModal(type) {
-      const email = prompt("Masukkan Email:");
-      const password = prompt("Masukkan Password:");
-      if (!email || !password) return;
-
-      if (type === 'register') {
-        const name = prompt("Nama Anda:");
-        const storeName = prompt("Nama Toko:");
-        fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email, password, storeName })
-        }).then(r => r.json()).then(res => {
-          if (res.success) {
-            localStorage.setItem('token', res.token);
-            authToken = res.token;
-            location.reload();
-          } else {
-            alert(res.error);
-          }
-        });
-      } else {
-        fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
-        }).then(r => r.json()).then(res => {
-          if (res.success) {
-            localStorage.setItem('token', res.token);
-            authToken = res.token;
-            location.reload();
-          } else {
-            alert(res.error);
-          }
-        });
-      }
-    }
-
-    function subscribePayPal(plan) {
-      if (!authToken) {
-        alert("Silakan login terlebih dahulu untuk berlangganan!");
-        showAuthModal('login');
-        return;
-      }
-      fetch('/api/subscription/create-paypal-order', {
+      fetch('/api/auth/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-        body: JSON.stringify({ plan, durationMonths: 1 })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, storeName })
       }).then(r => r.json()).then(res => {
-        if (res.success && res.approvalUrl) {
-          window.open(res.approvalUrl, '_blank');
+        if (res.success) {
+          localStorage.setItem('token', res.token);
+          localStorage.setItem('store', JSON.stringify(res.store));
+          token = res.token;
+          userStore = res.store;
+          renderApp();
         } else {
-          alert(res.error || 'Gagal membuat order PayPal');
+          alert(res.error);
         }
       });
     }
 
-    function renderDashboard() {
-      const nav = document.getElementById('auth-nav');
-      nav.innerHTML = '<button onclick="logout()" class="px-4 py-2 text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl hover:bg-red-500/30">Keluar</button>';
+    function promptLogin() {
+      const email = prompt("Email:");
+      const password = prompt("Password:");
+      if (!email || !password) return;
 
-      document.getElementById('app-view').innerHTML = \`
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
-          <div class="flex justify-between items-center pb-4 border-b border-slate-800">
-            <div>
-              <h2 class="text-xl font-bold text-white">Merchant Dashboard</h2>
-              <p class="text-xs text-slate-400">Atur Skema Atribut Dinamis, Produk, dan Integrasi Midtrans Toko Anda.</p>
-            </div>
-            <button onclick="subscribePayPal('PRO')" class="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-orange-500/20">⭐ Upgrade Paket Toko via PayPal</button>
-          </div>
-          <p class="text-sm text-slate-300">Sistem SaaS Multi-Tenant siap digunakan di Cloudflare Workers!</p>
-        </div>
-      \`;
+      fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      }).then(r => r.json()).then(res => {
+        if (res.success) {
+          localStorage.setItem('token', res.token);
+          localStorage.setItem('store', JSON.stringify(res.store));
+          token = res.token;
+          userStore = res.store;
+          renderApp();
+        } else {
+          alert(res.error);
+        }
+      });
+    }
+
+    function saveMidtransSettings() {
+      const clientKey = document.getElementById('store-midtrans-client').value.trim();
+      const serverKey = document.getElementById('store-midtrans-server').value.trim();
+
+      if (!clientKey || !serverKey) {
+        alert("Client Key dan Server Key wajib diisi!");
+        return;
+      }
+
+      fetch(\`/api/store/\${userStore.id}/settings/midtrans\`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        body: JSON.stringify({ clientKey, serverKey, isProduction: false })
+      }).then(r => r.json()).then(res => {
+        if (res.success) {
+          alert(res.message);
+          userStore.midtransClientKey = clientKey;
+          localStorage.setItem('store', JSON.stringify(userStore));
+        } else {
+          alert(res.error);
+        }
+      });
+    }
+
+    function subscribePayPal(plan) {
+      fetch('/api/subscription/create-paypal-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ plan })
+      }).then(r => r.json()).then(res => {
+        if (res.success && res.approvalUrl) {
+          window.open(res.approvalUrl, '_blank');
+        } else {
+          alert(res.error || 'Gagal menghubungkan ke PayPal');
+        }
+      });
     }
 
     function logout() {
-      localStorage.removeItem('token');
-      location.reload();
+      localStorage.clear();
+      token = null;
+      userStore = null;
+      renderApp();
     }
   </script>
 </body>
