@@ -4,7 +4,8 @@
 
 -- 1. TABEL PENGGUNA (USERS / MERCHANT)
 CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,                       -- Format: USR-xxxxxxxx
+    id TEXT PRIMARY KEY,
+-- Format: USR-xxxxxxxx
     name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
