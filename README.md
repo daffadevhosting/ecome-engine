@@ -1,6 +1,6 @@
 # ecome-engine
 
-# ⚡ StoreEngine SaaS: Multi-Tenant Dynamic E-Commerce & Dual Payment Engine (Midtrans & PayPal)
+# â¡ StoreEngine SaaS: Multi-Tenant Dynamic E-Commerce & Dual Payment Engine (Midtrans & PayPal)
 
 **StoreEngine SaaS** adalah platform e-commerce multi-tenant modern yang beroperasi sepenuhnya di arsitektur *serverless edge* **Cloudflare Workers**. 
 
@@ -8,16 +8,16 @@ Platform ini memungkinkan setiap pemilik toko (*merchant*) untuk menentukan **Sk
 
 ---
 
-## 🌟 Fitur Utama
+## ð Fitur Utama
 
-- 🏢 **Multi-Tenant Architecture**: Sistem autentikasi mandiri (Registrasi/Login) berbasis token JWT & Web Crypto PBKDF2 native. Setiap merchant memiliki toko, produk, pesanan, dan konfigurasinya sendiri.
-- 🧩 **Dynamic Product Schema (Zero Migration)**: Merchant bebas membuat atribut kustom (ukuran pakaian, varian warna, kapasitas RAM, opsi rasa, level pedas, garansi) yang disimpan secara fleksibel dalam format JSON di database relasional **Cloudflare D1**.
-- 💳 **Dinamis Midtrans Gateway per Tenant**:
+- ð¢ **Multi-Tenant Architecture**: Sistem autentikasi mandiri (Registrasi/Login) berbasis token JWT & Web Crypto PBKDF2 native. Setiap merchant memiliki toko, produk, pesanan, dan konfigurasinya sendiri.
+- ð§© **Dynamic Product Schema (Zero Migration)**: Merchant bebas membuat atribut kustom (ukuran pakaian, varian warna, kapasitas RAM, opsi rasa, level pedas, garansi) yang disimpan secara fleksibel dalam format JSON di database relasional **Cloudflare D1**.
+- ð³ **Dinamis Midtrans Gateway per Tenant**:
   - Merchant memasukkan `Client Key` dan `Server Key` Midtrans mereka sendiri di dashboard toko.
   - Dana transaksi penjualan langsung masuk ke akun Midtrans masing-masing merchant.
   - Endpoint Webhook dinamis (`/api/midtrans-webhook/:storeId`) dengan verifikasi **Signature SHA-512** otomatis per toko.
-- 💵 **SaaS Monetization via PayPal**: Integrasi paket langganan merchant (*Free*, *Pro*, *Enterprise*) yang terhubung langsung ke [PayPal Workers Engine](https://github.com/daffadevhosting/paypal-workers) (`https://paypal-pay.mvstream.workers.dev`).
-- ⚡ **Penuh di Ekosistem Cloudflare Edge**:
+- ðµ **SaaS Monetization via PayPal**: Integrasi paket langganan merchant (*Free*, *Pro*, *Enterprise*) yang terhubung langsung ke [PayPal Workers Engine](https://github.com/daffadevhosting/paypal-workers) (`https://paypal-pay.mvstream.workers.dev`).
+- â¡ **Penuh di Ekosistem Cloudflare Edge**:
   - **Cloudflare D1**: Database relasional SQL untuk multi-tenant, katalog, pesanan, dan histori langganan.
   - **Cloudflare KV**: *Edge caching* untuk skema atribut aktif dan metadata toko (*sub-millisecond latency*).
   - **Cloudflare Durable Objects**: Manajemen sesi keranjang belanja *real-time* & *inventory locking*.
@@ -25,43 +25,43 @@ Platform ini memungkinkan setiap pemilik toko (*merchant*) untuk menentukan **Sk
 
 ---
 
-## 🏗️ Arsitektur Alur Sistem
+## ðï¸ Arsitektur Alur Sistem
 
 ```text
-                               ┌─────────────────────────────────────────┐
-                               │       Pelanggan / Pembeli Toko          │
-                               └────────────────────┬────────────────────┘
-                                                    │
-                                                    ▼
-┌───────────────────────────┐          ┌─────────────────────────┐
-│     Merchant / Admin      │          │   Cloudflare Workers    │
-│    (Dashboard & Toko)     ├─────────►│     (Hono Framework)    │
-└─────────────┬─────────────┘          └────┬───────────────┬────┘
-              │                             │               │
-              │ (Langganan SaaS)            │ (Katalog/Data)│ (Transaksi Produk)
-              ▼                             ▼               ▼
-┌───────────────────────────┐    ┌─────────────────┐ ┌──────────────────────┐
-│  PayPal Workers Gateway   │    │  Cloudflare D1  │ │  Midtrans Snap API   │
-│  (Monetisasi Pemilik App) │    │  KV Cache & R2  │ │  (Akun Mandiri Toko) │
-└───────────────────────────┘    └─────────────────┘ └──────────────────────┘
+                               âââââââââââââââââââââââââââââââââââââââââââ
+                               â       Pelanggan / Pembeli Toko          â
+                               ââââââââââââââââââââââ¬âââââââââââââââââââââ
+                                                    â
+                                                    â¼
+âââââââââââââââââââââââââââââ          âââââââââââââââââââââââââââ
+â     Merchant / Admin      â          â   Cloudflare Workers    â
+â    (Dashboard & Toko)     âââââââââââºâ     (Hono Framework)    â
+âââââââââââââââ¬ââââââââââââââ          ââââââ¬ââââââââââââââââ¬âââââ
+              â                             â               â
+              â (Langganan SaaS)            â (Katalog/Data)â (Transaksi Produk)
+              â¼                             â¼               â¼
+âââââââââââââââââââââââââââââ    âââââââââââââââââââ ââââââââââââââââââââââââ
+â  PayPal Workers Gateway   â    â  Cloudflare D1  â â  Midtrans Snap API   â
+â  (Monetisasi Pemilik App) â    â  KV Cache & R2  â â  (Akun Mandiri Toko) â
+âââââââââââââââââââââââââââââ    âââââââââââââââââââ ââââââââââââââââââââââââ
 ```
 
 ---
 
-## 📁 Struktur File Repositori
+## ð Struktur File Repositori
 
 ```text
-├── src/
-│   └── ecome.ts            # Kode utama Cloudflare Worker (API, Auth, Logic, & Frontend SPA)
-├── schema.sql               # Skema Database Cloudflare D1 SQL Multi-Tenant
-├── wrangler.toml            # Konfigurasi Environment & Binding Cloudflare
-├── package.json             # Dependensi & Skrip Node.js
-└── README.md                # Dokumentasi Repositori
+âââ src/
+â   âââ ecome.ts            # Kode utama Cloudflare Worker (API, Auth, Logic, & Frontend SPA)
+âââ schema.sql               # Skema Database Cloudflare D1 SQL Multi-Tenant
+âââ wrangler.toml            # Konfigurasi Environment & Binding Cloudflare
+âââ package.json             # Dependensi & Skrip Node.js
+âââ README.md                # Dokumentasi Repositori
 ```
 
 ---
 
-## 🚀 Panduan Instalasi & Deployment
+## ð Panduan Instalasi & Deployment
 
 ### 1. Prasyarat
 - [Node.js](https://nodejs.org/) (versi 18 atau lebih baru)
@@ -71,7 +71,7 @@ Platform ini memungkinkan setiap pemilik toko (*merchant*) untuk menentukan **Sk
 
 ### 2. Kloning Repositori & Pasang Dependensi
 ```bash
-git clone [https://github.com/username-anda/cloudflare-store-engine.git](https://github.com/username-anda/cloudflare-store-engine.git)
+git clone [https://github.com/daffadevhosting/ecome-engine.git](https://github.com/daffadevhosting/ecome-engine.git)
 cd cloudflare-store-engine
 npm install
 ```
@@ -159,7 +159,7 @@ wrangler deploy
 
 ---
 
-## 🛠️ Panduan Konfigurasi Midtrans per Tenant
+## ð ï¸ Panduan Konfigurasi Midtrans per Tenant
 
 Setiap merchant yang mendaftar dapat menghubungkan akun Midtrans miliknya dengan langkah berikut:
 
@@ -175,22 +175,22 @@ Setiap merchant yang mendaftar dapat menghubungkan akun Midtrans miliknya dengan
 
 ---
 
-## 📑 Dokumentasi Endpoint API
+## ð Dokumentasi Endpoint API
 
-### 🔐 Autentikasi Merchant
+### ð Autentikasi Merchant
 | Method | Endpoint | Deskripsi |
 | :--- | :--- | :--- |
 | `POST` | `/api/auth/register` | Mendaftarkan merchant baru beserta toko awalnya |
 | `POST` | `/api/auth/login` | Otentikasi login merchant dan menghasilkan token JWT |
 
-### ⚙️ Pengaturan Toko & Dynamic Schema
+### âï¸ Pengaturan Toko & Dynamic Schema
 | Method | Endpoint | Deskripsi |
 | :--- | :--- | :--- |
 | `GET` | `/api/store/:storeId/schema` | Mengambil skema atribut dinamis toko |
 | `POST` | `/api/store/:storeId/schema` | Mengubah/menambah atribut dinamis toko *(Auth Required)* |
 | `POST` | `/api/store/:storeId/settings/midtrans` | Menyimpan Server Key & Client Key Midtrans toko *(Auth Required)* |
 
-### 📦 Manajemen Produk & Belanja
+### ð¦ Manajemen Produk & Belanja
 | Method | Endpoint | Deskripsi |
 | :--- | :--- | :--- |
 | `GET` | `/api/store/:storeId/products` | Menampilkan seluruh produk toko beserta atribut dinamis |
@@ -198,7 +198,7 @@ Setiap merchant yang mendaftar dapat menghubungkan akun Midtrans miliknya dengan
 | `POST` | `/api/store/:storeId/checkout` | Memulai transaksi checkout menggunakan Snap Midtrans toko terkait |
 | `POST` | `/api/midtrans-webhook/:storeId` | Callback notifikasi otomatis dari Midtrans per toko |
 
-### 💳 SaaS Subscription (PayPal)
+### ð³ SaaS Subscription (PayPal)
 | Method | Endpoint | Deskripsi |
 | :--- | :--- | :--- |
 | `POST` | `/api/subscription/create-paypal-order` | Membuat pesanan langganan paket Pro/Enterprise |
@@ -206,7 +206,7 @@ Setiap merchant yang mendaftar dapat menghubungkan akun Midtrans miliknya dengan
 
 ---
 
-## 🔒 Keamanan & Verifikasi Signature
+## ð Keamanan & Verifikasi Signature
 
 Sistem ini memverifikasi integritas setiap webhook Midtrans menggunakan algoritma **SHA-512**:
 $$\text{Signature} = \text{SHA512}(\text{order\_id} + \text{status\_code} + \text{gross\_amount} + \text{MerchantServerKey})$$
@@ -215,5 +215,5 @@ Notifikasi dengan signature yang tidak valid akan langsung ditolak (`403 Forbidd
 
 ---
 
-## 📄 Lisensi
+## ð Lisensi
 Proyek ini didistribusikan di bawah lisensi **MIT**. Silakan gunakan, modifikasi, dan kembangkan sesuai kebutuhan platform bisnis Anda.
