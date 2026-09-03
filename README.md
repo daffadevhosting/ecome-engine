@@ -71,7 +71,7 @@ Platform ini memungkinkan setiap pemilik toko (*merchant*) untuk menentukan **Sk
 
 ### 2. Kloning Repositori & Pasang Dependensi
 ```bash
-git clone [https://github.com/daffadevhosting/ecome-engine.git](https://github.com/daffadevhosting/ecome-engine.git)
+git clone https://github.com/daffadevhosting/ecome-engine.git
 cd ecome-engine
 npm install
 ```
