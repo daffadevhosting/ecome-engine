@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS orders (
     FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
 );
 
+-- 6. RESERVASI STOK KERANJANG PEMBELI
+CREATE TABLE IF NOT EXISTS inventory_reservations (
+    id TEXT PRIMARY KEY,
+    store_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    cart_id TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    status TEXT DEFAULT 'reserved', -- reserved, consumed, released
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
 -- 6. TABEL RIWAYAT LANGGANAN SAAS PAYPAL (SUBSCRIPTIONS)
 CREATE TABLE IF NOT EXISTS subscriptions (
     id TEXT PRIMARY KEY,                       -- Format: SUB-xxxxxxxx
@@ -97,3 +110,5 @@ CREATE INDEX IF NOT EXISTS idx_products_store_id ON products(store_id);
 CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_cart ON inventory_reservations(cart_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservations_product ON inventory_reservations(product_id, status);

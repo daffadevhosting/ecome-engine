@@ -1,21 +1,16 @@
 # ecome-engine
 
-# ⚡ StoreEngine SaaS: Multi-Tenant Dynamic E-Commerce & Dual Payment Engine (Midtrans & PayPal)
-
-**StoreEngine SaaS** adalah platform e-commerce multi-tenant modern yang beroperasi sepenuhnya di arsitektur *serverless edge* **Cloudflare Workers**. 
 
 Platform ini memungkinkan setiap pemilik toko (*merchant*) untuk menentukan **Skema Atribut Dinamis** (tanpa migrasi database SQL), mengelola kredensial **Midtrans Payment Gateway** secara mandiri (dana penjualan langsung masuk ke rekening masing-masing merchant), serta menyediakan fitur monetisasi platform menggunakan **PayPal Subscription Engine**.
 
----
-
 ## 🌟 Fitur Utama
 
-- 🏢 **Multi-Tenant Architecture**: Sistem autentikasi mandiri (Registrasi/Login) berbasis token JWT & Web Crypto PBKDF2 native. Setiap merchant memiliki toko, produk, pesanan, dan konfigurasinya sendiri.
 - 🧩 **Dynamic Product Schema (Zero Migration)**: Merchant bebas membuat atribut kustom (ukuran pakaian, varian warna, kapasitas RAM, opsi rasa, level pedas, garansi) yang disimpan secara fleksibel dalam format JSON di database relasional **Cloudflare D1**.
 - 💳 **Dinamis Midtrans Gateway per Tenant**:
   - Merchant memasukkan `Client Key` dan `Server Key` Midtrans mereka sendiri di dashboard toko.
   - Dana transaksi penjualan langsung masuk ke akun Midtrans masing-masing merchant.
   - Endpoint Webhook dinamis (`/api/midtrans-webhook/:storeId`) dengan verifikasi **Signature SHA-512** otomatis per toko.
+- 📦 **Stok Dinamis Tanpa Durable Objects**: Keranjang buyer disimpan di `localStorage` tanpa mengurangi stok. Stok dikurangi secara atomik hanya ketika checkout dimulai, lalu dikembalikan jika Midtrans gagal, dibatalkan, atau expired, dan baru dianggap terjual setelah pembayaran berhasil.
 - 💵 **SaaS Monetization via PayPal**: Integrasi paket langganan merchant (*Free*, *Pro*, *Enterprise*) yang terhubung langsung ke [PayPal Workers Engine](https://github.com/daffadevhosting/paypal-workers) (`https://paypal-pay.mvstream.workers.dev`).
 - ⚡ **Penuh di Ekosistem Cloudflare Edge**:
   - **Cloudflare D1**: Database relasional SQL untuk multi-tenant, katalog, pesanan, dan histori langganan.
@@ -173,6 +168,16 @@ Setiap merchant yang mendaftar dapat menghubungkan akun Midtrans miliknya dengan
    ```
 6. Simpan konfigurasi. Sekarang status pesanan pelanggan akan otomatis tersinkronisasi secara real-time.
 
+### Link Toko untuk Pembeli
+
+Setiap toko memiliki halaman storefront publik berdasarkan slug toko:
+
+```text
+https://domain-worker-anda.workers.dev/store/{slug-toko}
+```
+
+Link ini tersedia di dashboard merchant pada bagian **Link toko pembeli**. Pembeli dapat melihat katalog, menambahkan produk ke keranjang, mengisi data pelanggan, dan melanjutkan pembayaran melalui Midtrans.
+
 ---
 
 ## 📑 Dokumentasi Endpoint API
@@ -195,6 +200,11 @@ Setiap merchant yang mendaftar dapat menghubungkan akun Midtrans miliknya dengan
 | :--- | :--- | :--- |
 | `GET` | `/api/store/:storeId/products` | Menampilkan seluruh produk toko beserta atribut dinamis |
 | `POST` | `/api/store/:storeId/products` | Menambahkan produk baru ke toko *(Auth Required)* |
+| `PUT` | `/api/store/:storeId/products/:productId` | Mengubah produk toko *(Auth Required)* |
+| `DELETE` | `/api/store/:storeId/products/:productId` | Menghapus produk toko *(Auth Required)* |
+| `GET` | `/store/:slug` | Halaman storefront publik untuk pembeli |
+| `POST` | `/api/store/:storeId/inventory/reserve` | Endpoint reservasi stok atomik *(tersedia untuk integrasi lanjutan)* |
+| `POST` | `/api/store/:storeId/inventory/release` | Endpoint pelepasan reservasi stok *(tersedia untuk integrasi lanjutan)* |
 | `POST` | `/api/store/:storeId/checkout` | Memulai transaksi checkout menggunakan Snap Midtrans toko terkait |
 | `POST` | `/api/midtrans-webhook/:storeId` | Callback notifikasi otomatis dari Midtrans per toko |
 

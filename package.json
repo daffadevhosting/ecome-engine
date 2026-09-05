@@ -1,5 +1,5 @@
 {
-  "name": "cloudflare-store-engine",
+  "name": "store-engine",
   "version": "1.0.0",
   "description": "Multi-Tenant Dynamic E-Commerce & Dual Payment Engine (Midtrans & PayPal) on Cloudflare Workers",
   "main": "src/worker.ts",
